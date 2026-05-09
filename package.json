@@ -1,0 +1,27 @@
+{
+  "name": "amc-book-movie",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "launch-brave": "start \"\" \"%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe\" --remote-debugging-port=9222 --user-data-dir=\"playwright\\.auth\\brave-profile\"",
+    "save-session": "ts-node src/saveSession.ts",
+    "book": "ts-node src/index.ts",
+    "debug": "cross-env PWDEBUG=1 ts-node src/index.ts",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "minimist": "^1.2.8",
+    "patchright": "^1.59.4",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0",
+    "@types/minimist": "^1.2.5",
+    "@types/node": "^20.0.0",
+    "cross-env": "^7.0.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0"
+  }
+}

@@ -1,0 +1,16 @@
+.env
+.env.local
+.env.*.local
+node_modules/
+dist/
+playwright/.auth/
+screenshots/
+playwright-report/
+test-results/
+logs/
+*.log
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
