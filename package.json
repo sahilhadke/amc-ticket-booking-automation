@@ -5,6 +5,7 @@
   "scripts": {
     "launch-brave": "start \"\" \"%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe\" --remote-debugging-port=9222 --user-data-dir=\"playwright\\.auth\\brave-profile\"",
     "save-session": "ts-node src/saveSession.ts",
+    "crawl-history": "ts-node src/crawlHistory.ts",
     "book": "ts-node src/index.ts",
     "debug": "cross-env PWDEBUG=1 ts-node src/index.ts",
     "build": "tsc --noEmit"

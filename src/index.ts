@@ -12,6 +12,7 @@ import { completeCheckout } from './checkout';
 import { BookingArgs } from './types';
 import { log, error } from './utils/logger';
 import { sleep } from './utils/human';
+import { isAlreadyWatched, addToHistory } from './historyManager';
 
 const SESSION_PATH = path.join(process.cwd(), 'playwright', '.auth', 'session.json');
 
@@ -57,6 +58,12 @@ async function main(): Promise<void> {
 
   log(`Booking: "${args.movie}" on ${args.date} at ${args.time}${args.theater ? ` @ ${args.theater}` : ''}`);
 
+  // Warn if already watched — don't block, just inform
+  const watched = isAlreadyWatched(args.movie);
+  if (watched) {
+    log(`WARN: You already watched "${watched.title}" on ${watched.date}${watched.theater ? ` at ${watched.theater}` : ''}. Proceeding anyway.`);
+  }
+
   const browser = await chromium.launch({
     headless: false,
     slowMo: 50,
@@ -77,6 +84,13 @@ async function main(): Promise<void> {
     await findShowtime(page, args);
     await selectBestSeat(page);
     await completeCheckout(page);
+    // Record the booking in watch history
+    addToHistory({
+      title: args.movie,
+      date: args.date,
+      theater: args.theater ?? 'AMC Metreon 16',
+      showtime: args.time,
+    });
     log('Done. Enjoy the movie!');
   } catch (err: unknown) {
     // Navigate home to release any in-progress checkout / A-List hold
