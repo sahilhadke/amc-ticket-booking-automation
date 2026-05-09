@@ -1,4 +1,20 @@
 import { Page, Locator } from 'patchright';
+import { log } from './logger';
+
+// Navigate to any AMC page and wait out the Queue-it waiting room if triggered
+export async function gotoWithQueue(page: Page, url: string, timeoutMs = 120_000): Promise<void> {
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  if (page.url().includes('queue')) {
+    log(`Queue-it detected on ${url} — waiting up to ${timeoutMs / 1000}s...`);
+    // Wait until we're back on the target AMC domain (not queue.amctheatres.com)
+    await page.waitForFunction(
+      () => !window.location.href.includes('queue'),
+      { timeout: timeoutMs }
+    );
+    log('Queue passed.');
+    await sleep(2000);
+  }
+}
 
 const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
 

@@ -2,6 +2,12 @@
   "lastUpdated": "2026-05-09",
   "movies": [
     {
+      "title": "The Sheep Detectives",
+      "date": "2026-05-10",
+      "theater": "AMC Metreon 16",
+      "showtime": "4:00 PM"
+    },
+    {
       "title": "Michael",
       "date": "2026-05-08"
     },

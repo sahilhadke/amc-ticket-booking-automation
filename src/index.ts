@@ -10,27 +10,8 @@ import { findShowtime } from './movieFinder';
 import { selectBestSeat } from './seatSelector';
 import { completeCheckout } from './checkout';
 import { BookingArgs } from './types';
-import { log, error } from './utils/logger';
-import { sleep } from './utils/human';
-import { isAlreadyWatched, addToHistory } from './historyManager';
 
 const SESSION_PATH = path.join(process.cwd(), 'playwright', '.auth', 'session.json');
-
-async function warmUp(page: import('patchright').Page): Promise<void> {
-  log('Warming up session...');
-  await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded' });
-  await sleep(2000 + Math.random() * 1000);
-  for (let i = 0; i < 6; i++) {
-    await page.mouse.move(
-      200 + Math.random() * 900,
-      150 + Math.random() * 500,
-      { steps: 12 }
-    );
-    await sleep(250 + Math.random() * 350);
-  }
-  await page.evaluate(() => window.scrollBy(0, 200 + Math.random() * 300));
-  await sleep(1000 + Math.random() * 500);
-}
 
 async function main(): Promise<void> {
   const argv = minimist(process.argv.slice(2), {
@@ -46,63 +27,47 @@ async function main(): Promise<void> {
 
   const missing = (['movie', 'date', 'time'] as const).filter(k => !args[k]);
   if (missing.length > 0) {
-    error(`Missing required arguments: ${missing.map(k => `--${k}`).join(', ')}`);
-    error('Usage: npm run book -- --movie "Movie Name" --date "YYYY-MM-DD" --time "7:30 PM" [--theater "Theater Name"]');
+    console.error(`Missing: ${missing.map(k => `--${k}`).join(', ')}`);
+    console.error('Usage: npm run book -- --movie "Name" --date "YYYY-MM-DD" --time "H:MM PM" [--theater "Theater"]');
     process.exit(1);
   }
 
   if (!fs.existsSync(SESSION_PATH)) {
-    error('No saved session found. Run "npm run launch-brave" then "npm run save-session" first.');
+    console.error('No session found. Run: npm run launch-brave  then  npm run save-session');
     process.exit(1);
   }
 
-  log(`Booking: "${args.movie}" on ${args.date} at ${args.time}${args.theater ? ` @ ${args.theater}` : ''}`);
-
-  // Warn if already watched — don't block, just inform
-  const watched = isAlreadyWatched(args.movie);
-  if (watched) {
-    log(`WARN: You already watched "${watched.title}" on ${watched.date}${watched.theater ? ` at ${watched.theater}` : ''}. Proceeding anyway.`);
-  }
-
-  const browser = await chromium.launch({
-    headless: false,
-    slowMo: 50,
-    args: ['--start-maximized'],
-  });
-
+  const browser = await chromium.launch({ headless: false, slowMo: 50, args: ['--start-maximized'] });
   const context = await browser.newContext({
     viewport: null,
     storageState: SESSION_PATH,
     locale: 'en-US',
     timezoneId: 'America/Los_Angeles',
   });
-
   const page = await context.newPage();
 
   try {
-    await warmUp(page);
     await findShowtime(page, args);
-    await selectBestSeat(page);
-    await completeCheckout(page);
-    // Record the booking in watch history
-    addToHistory({
-      title: args.movie,
-      date: args.date,
-      theater: args.theater ?? 'AMC Metreon 16',
-      showtime: args.time,
-    });
-    log('Done. Enjoy the movie!');
-  } catch (err: unknown) {
-    // Navigate home to release any in-progress checkout / A-List hold
-    await page.goto('https://www.amctheatres.com', { waitUntil: 'domcontentloaded' }).catch(() => {});
-    const msg = err instanceof Error ? err.message : String(err);
-    error(`Booking failed: ${msg}`);
-    await page.screenshot({ path: `screenshots/error-${Date.now()}.png` }).catch(() => {});
+    const seat = await selectBestSeat(page);
+    const result = await completeCheckout(page);
     await browser.close();
+
+    console.log(
+      `\n✓  BOOKED` +
+      `\n   Movie    : ${args.movie}` +
+      `\n   Date     : ${args.date}  ${args.time}` +
+      `\n   Theater  : ${result.theater || args.theater || ''}` +
+      `\n   Seat     : ${seat}` +
+      `\n   Total    : ${result.totalPrice}` +
+      `\n   Confirm# : ${result.confirmationNumber}\n`
+    );
+  } catch (err: unknown) {
+    await page.goto('https://www.amctheatres.com', { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await browser.close();
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`\n✗  FAILED: ${msg}\n`);
     process.exit(1);
   }
-
-  await browser.close();
 }
 
 main();

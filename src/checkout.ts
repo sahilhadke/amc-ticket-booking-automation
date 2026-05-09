@@ -4,7 +4,14 @@ import { log } from './utils/logger';
 import { humanClick, sleep } from './utils/human';
 import * as fs from 'fs';
 
-export async function completeCheckout(page: Page): Promise<void> {
+export interface BookingResult {
+  confirmationNumber: string;
+  totalPrice: string;
+  seatInfo: string;    // e.g. "Seats D3"
+  theater: string;
+}
+
+export async function completeCheckout(page: Page): Promise<BookingResult> {
   fs.mkdirSync('screenshots', { recursive: true });
 
   // ── Step 1: Continue from seat selection page ──────────────
@@ -71,12 +78,28 @@ export async function completeCheckout(page: Page): Promise<void> {
 
   // ── Step 6: Confirm Purchase page ─────────────────────────────
   const confirmText = await page.innerText('body').catch(() => '');
+
+  // Safety: abort if A-List can't be applied (would charge real money)
+  if (/unable to process your a-list|cannot process.*a-list/i.test(confirmText)) {
+    await cancelPendingCheckout(page);
+    throw new BookingFailed(
+      'A-List reservation blocked — too many recent bookings. Wait ~15 minutes and try again.'
+    );
+  }
+
   if (/confirm purchase|confirm order/i.test(confirmText)) {
     log('Step 6: On Confirm Purchase page');
 
+    // Safety: if total is non-zero, do not proceed (would charge real money)
+    const totalMatch = confirmText.match(/TOTAL\s+\$?([\d.]+)/i);
+    const totalAmt = parseFloat(totalMatch?.[1] ?? '0');
+    if (totalAmt > 0.5) {
+      await cancelPendingCheckout(page);
+      throw new BookingFailed(`Order total is $${totalAmt.toFixed(2)} — A-List discount not applied. Aborting to avoid charge.`);
+    }
+
     // Accept any terms/agreements that are required
     await page.evaluate(() => {
-      // Check any unchecked required checkboxes (terms, agreements)
       const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
       checkboxes.forEach(cb => { if (!cb.checked) cb.click(); });
     });
@@ -89,8 +112,8 @@ export async function completeCheckout(page: Page): Promise<void> {
     await jsClickText(page, 'Continue', 'Purchase', 'Place Order');
   }
 
-  // Wait for AMC to process the purchase
-  await sleep(6000);
+  // Wait for AMC to process the purchase and page to fully render
+  await sleep(8000);
   await page.screenshot({ path: 'screenshots/checkout-confirmed.png' }).catch(() => {});
 
   // ── Step 7: Check outcome ──────────────────────────────────
@@ -108,7 +131,23 @@ export async function completeCheckout(page: Page): Promise<void> {
     throw new BookingFailed('Order may not have completed — check screenshots/checkout-confirmed.png');
   }
 
+  // Extract details from the confirmation page
+  const confirmText2 = await page.innerText('body').catch(() => '');
+  const confirmNumMatch = confirmText2.match(/TICKET\s+CONFIRMATION\s+#[:\s]+(\d+)/i);
+  const priceMatch = confirmText2.match(/TOTAL\s+\$?([\d.]+)/i);
+  const seatMatch = confirmText2.match(/Seats?\s+([A-Z]\d+)/i);
+  const theaterMatch = confirmText2.match(/AMC\s+[\w\s]+\d+/i);
+
+  const result: BookingResult = {
+    confirmationNumber: confirmNumMatch?.[1] ?? 'unknown',
+    totalPrice: `$${priceMatch?.[1] ?? '0.00'}`,
+    seatInfo: seatMatch?.[1] ?? '',
+    theater: theaterMatch?.[0]?.trim() ?? '',
+  };
+
+  log(`Confirmation #: ${result.confirmationNumber} | Total: ${result.totalPrice} | ${result.seatInfo}`);
   log('Booking confirmed! See screenshots/checkout-confirmed.png');
+  return result;
 }
 
 // Navigate away so AMC releases the in-progress checkout / A-List hold

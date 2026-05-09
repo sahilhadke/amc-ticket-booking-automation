@@ -16,7 +16,7 @@ interface SeatInfo {
   name: string;
 }
 
-export async function selectBestSeat(page: Page): Promise<void> {
+export async function selectBestSeat(page: Page): Promise<string> {
   log('Waiting for seat map');
   await page.waitForSelector(GRID_SELECTOR, { timeout: 20_000 });
   await sleep(1500);
@@ -139,8 +139,6 @@ export async function selectBestSeat(page: Page): Promise<void> {
   }
 
   await sleep(1500);
-
-  fs.mkdirSync('screenshots', { recursive: true });
-  await page.screenshot({ path: 'screenshots/after-seat-click.png' }).catch(() => {});
   log(`Seat "${best.name}" clicked — proceeding to checkout`);
+  return best.name;
 }
