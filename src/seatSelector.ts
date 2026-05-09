@@ -91,8 +91,8 @@ export async function selectBestSeat(page: Page): Promise<string> {
     const row = rows[rowIdx];
     for (let colIdx = 0; colIdx < row.length; colIdx++) {
       const s = row[colIdx];
-      // Skip front 2 rows (closest to screen) and accessible spaces
-      if (!s.available || isAccessible(s.name) || rowIdx < 2) continue;
+      // Only consider the last 4 rows; skip accessible spaces
+      if (!s.available || isAccessible(s.name) || rowIdx < totalRows - 4) continue;
       const dist = Math.sqrt((backRow - rowIdx) ** 2 + (colIdx - centerCol) ** 2);
       if (dist < bestDist) {
         bestDist = dist;
@@ -101,7 +101,7 @@ export async function selectBestSeat(page: Page): Promise<string> {
     }
   }
 
-  if (!best) throw new NoSeatsAvailable('No available seats found');
+  if (!best) throw new NoSeatsAvailable('No available seats in the last 4 rows — all taken or sold out.');
 
   log(`Best seat: "${best.name}" row=${best.row + 1}/${totalRows} col=${best.col + 1}/${totalCols} dist=${bestDist.toFixed(2)}`);
   log(`  Visual coordinates: (${Math.round(best.cx)}, ${Math.round(best.cy)})`);
