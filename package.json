@@ -5,6 +5,8 @@
   "scripts": {
     "launch-brave": "start \"\" \"%LOCALAPPDATA%\\BraveSoftware\\Brave-Browser\\Application\\brave.exe\" --remote-debugging-port=9222 --user-data-dir=\"playwright\\.auth\\brave-profile\"",
     "save-session": "ts-node src/saveSession.ts",
+    "auth-email": "ts-node src/authEmail.ts",
+    "get-ticket-email": "ts-node src/getTicketEmail.ts",
     "get-showtimes": "ts-node src/getShowtimes.ts",
     "crawl-history": "ts-node src/crawlHistory.ts",
     "book": "ts-node src/index.ts",
@@ -13,6 +15,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
+    "googleapis": "^171.4.0",
     "minimist": "^1.2.8",
     "patchright": "^1.59.4",
     "playwright-extra": "^4.3.6",
