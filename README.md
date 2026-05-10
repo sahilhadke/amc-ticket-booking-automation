@@ -1,6 +1,77 @@
 # amc-book-movie
 
-Playwright + TypeScript CLI that automatically books AMC movie tickets for AMC Stubs A-List members. Given a movie name, date, and showtime, it finds the best available seat and completes the full checkout at $0.00.
+Playwright + TypeScript CLI that automates AMC movie ticket booking for AMC Stubs A-List members in three steps:
+
+| Step | Command | What it does |
+|------|---------|-------------|
+| 1 — Discover | `npm run get-showtimes` | Fetches all movies and showtimes for a date → saves JSON |
+| 2 — Book | `npm run book` | Books a specific movie/time, selects best seat, checks out at $0.00 |
+| 3 — Notify | *(coming soon)* | Sends confirmation notification |
+
+---
+
+## Step 1 — Get Showtimes
+
+Scrapes all movies playing at AMC Metreon 16 on a given date and saves them to a JSON file. Use this to decide what to book.
+
+### Command
+
+```bash
+npm run get-showtimes -- --date "YYYY-MM-DD" [--theater "theater-slug"]
+```
+
+**Example:**
+```bash
+npm run get-showtimes -- --date "2026-05-11"
+```
+
+### Output
+
+Saves to `showtimes/amc-metreon-16-{date}.json`:
+
+```json
+{
+  "date": "2026-05-11",
+  "theater": "AMC Metreon 16",
+  "theaterSlug": "amc-metreon-16",
+  "fetchedAt": "2026-05-10T17:52:08.820Z",
+  "movies": [
+    {
+      "title": "Project Hail Mary",
+      "slug": "project-hail-mary-76779",
+      "showtimes": [
+        {
+          "time": "3:45pm",
+          "url": "https://www.amctheatres.com/showtimes/142183580",
+          "format": "LASER AT AMC",
+          "availability": ""
+        },
+        {
+          "time": "1:45pm",
+          "url": "https://www.amctheatres.com/showtimes/142183579",
+          "format": "LASER AT AMC",
+          "availability": "20% OFF"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--date` | Yes | Date in `YYYY-MM-DD` format |
+| `--theater` | No | Theater slug (default: `amc-metreon-16`) |
+
+### Notes
+
+- Requires a saved session (run `npm run launch-brave` + `npm run save-session` first).
+- Handles AMC's Queue-it waiting room automatically.
+- `availability` shows discount offers (e.g. `"20% OFF"`, `"UP TO 15% OFF"`) or seat warnings (e.g. `"Almost Full"`).
+- `format` shows the screen type: `LASER AT AMC`, `IMAX WITH LASER AT AMC`, `DOLBY CINEMA AT AMC`, `FAN FAVES`, etc.
+- Output folder `showtimes/` is gitignored.
 
 ---
 
@@ -13,7 +84,8 @@ This section is for AI agents using this tool to book movie tickets on behalf of
 - The session is already saved — no login required before booking.
 - The theater defaults to **AMC Metreon 16** (the user's saved preference).
 - Bookings are always **$0.00** via AMC Stubs A-List — never charge the user.
-- The seat picker automatically selects the **best back-center seat**, skipping front rows and wheelchair spaces.
+- The seat picker selects the **best seat in the last 4 rows**, back-center, skipping wheelchair spaces.
+- Run `npm run get-showtimes -- --date "YYYY-MM-DD"` first to see what's playing and pick a movie/time.
 
 ### Booking command
 
@@ -160,15 +232,18 @@ The seat with the lowest score is selected. The algorithm automatically excludes
 
 ```
 src/
-├── index.ts          # CLI entry — parses args, orchestrates the flow
-├── saveSession.ts    # CDP-connects to Brave for manual login + session save
-├── movieFinder.ts    # Navigates to theater showtimes, finds and clicks the showtime
-├── seatSelector.ts   # Parses seat map, picks best seat via radial algorithm
-├── checkout.ts       # Handles A-List stubs, food skip, Confirm Purchase
-├── auth.ts           # (Unused in main flow) Login automation with CapSolver
+├── getShowtimes.ts   # Step 1 — scrape all movies/showtimes for a date → JSON
+├── index.ts          # Step 2 — CLI entry, orchestrates booking flow
+├── saveSession.ts    # Session login via CDP-connected Brave
+├── movieFinder.ts    # Navigates showtimes page, finds and clicks the showtime
+├── seatSelector.ts   # Parses seat map, picks best seat in last 4 rows (radial)
+├── checkout.ts       # A-List stubs, food skip, Confirm Purchase, safety checks
+├── historyManager.ts # Read/write watched-history.json
+├── crawlHistory.ts   # Scrape /my-amc/history → watched-history.json
+├── ticketCapture.ts  # Navigate to ticket page and screenshot QR code
 └── utils/
     ├── logger.ts     # Timestamped INFO/ERROR logging
-    ├── human.ts      # Human-like mouse movement, typing delays, sleep
+    ├── human.ts      # Mouse movement, sleep, gotoWithQueue (Queue-it handler)
     ├── errors.ts     # Typed custom errors
     └── capsolver.ts  # CapSolver Turnstile API integration
 ```
