@@ -10,6 +10,7 @@ test-results/
 logs/
 *.log
 output/
+showtimes/
 .DS_Store
 .vscode/
 .idea/
