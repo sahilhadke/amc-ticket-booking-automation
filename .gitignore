@@ -12,6 +12,10 @@ logs/
 output/
 showtimes/
 watched-history.json
+tickets/
+booking-log.txt
+qr-log.txt
+run-*.bat
 .DS_Store
 .vscode/
 .idea/

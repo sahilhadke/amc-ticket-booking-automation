@@ -74,7 +74,19 @@ export async function completeCheckout(page: Page): Promise<BookingResult> {
 
   log('Step 5: Continue from food/order summary');
   await jsClickText(page, 'Continue');
-  await sleep(2000);
+
+  // Wait until the Confirm Purchase review page is actually loaded.
+  // Detect by either the page text OR the presence of a Purchase-style button —
+  // the header text can take >12s to render, but the button appears reliably.
+  await page.waitForFunction(
+    () => {
+      if (/confirm purchase|confirm order/i.test(document.body.innerText)) return true;
+      const els = Array.from(document.querySelectorAll('button, a')) as HTMLElement[];
+      return els.some(el => /^(purchase|place order|complete purchase|submit order)$/i.test((el.innerText ?? '').trim()));
+    },
+    { timeout: 30000 }
+  ).catch(() => {});
+  await sleep(500);
 
   // ── Step 6: Confirm Purchase page ─────────────────────────────
   const confirmText = await page.innerText('body').catch(() => '');
@@ -87,7 +99,13 @@ export async function completeCheckout(page: Page): Promise<BookingResult> {
     );
   }
 
-  if (/confirm purchase|confirm order/i.test(confirmText)) {
+  const hasPurchaseButton = await page.evaluate(() => {
+    const els = Array.from(document.querySelectorAll('button, a')) as HTMLElement[];
+    return els.some(el => /^(purchase|place order|complete purchase|submit order)$/i.test((el.innerText ?? '').trim()));
+  });
+  const onReviewPage = /confirm purchase|confirm order/i.test(confirmText) || hasPurchaseButton;
+
+  if (onReviewPage) {
     log('Step 6: On Confirm Purchase page');
 
     // Safety: if total is non-zero, do not proceed (would charge real money)
@@ -106,14 +124,20 @@ export async function completeCheckout(page: Page): Promise<BookingResult> {
     await sleep(500);
 
     log('  Clicking Purchase');
-    await jsClickText(page, 'Purchase', 'Place Order', 'Complete Purchase', 'Submit Order');
+    await jsClickExact(page, 'Purchase', 'Place Order', 'Complete Purchase', 'Submit Order');
+
+    // Wait for AMC to navigate away from the review page after purchase
+    await page.waitForFunction(
+      () => !/confirm purchase|confirm order/i.test(document.body.innerText),
+      { timeout: 20000 }
+    ).catch(() => {});
   } else {
-    log('Step 6: Clicking final Continue/Purchase');
-    await jsClickText(page, 'Continue', 'Purchase', 'Place Order');
+    log('Step 6: No review page detected — clicking Continue');
+    await jsClickText(page, 'Continue');
   }
 
   // Wait for AMC to process the purchase and page to fully render
-  await sleep(8000);
+  await sleep(10000);
   await page.screenshot({ path: 'screenshots/checkout-confirmed.png' }).catch(() => {});
 
   // ── Step 7: Check outcome ──────────────────────────────────
@@ -133,7 +157,7 @@ export async function completeCheckout(page: Page): Promise<BookingResult> {
 
   // Extract details from the confirmation page
   const confirmText2 = await page.innerText('body').catch(() => '');
-  const confirmNumMatch = confirmText2.match(/TICKET\s+CONFIRMATION\s+#[:\s]+(\d+)/i);
+  const confirmNumMatch = confirmText2.match(/confirmation\s*#[:\s]*(\d+)/i);
   const priceMatch = confirmText2.match(/TOTAL\s+\$?([\d.]+)/i);
   const seatMatch = confirmText2.match(/Seats?\s+([A-Z]\d+)/i);
   const theaterMatch = confirmText2.match(/AMC\s+[\w\s]+\d+/i);
@@ -174,13 +198,35 @@ function isConfirmationUrl(url: string): boolean {
 }
 
 function isConfirmationText(text: string): boolean {
-  // "Confirm Purchase" is the REVIEW page — not a success state, skip it
+  // "Confirm Purchase" is the review page — a false positive, not a success state
+  if (/confirm purchase|confirm order/i.test(text)) return false;
   // "Food & Drinks" / Express Pick-Up with countdown = post-purchase success
   if (/food.{0,10}drinks|express pick.up/i.test(text)
       && /\d+:\d+ left/i.test(text)
       && !/no longer available|purchased by another|must complete/i.test(text)) return true;
   // Standard confirmation text
   return /your order is confirmed|booking confirmed|see you at the movies|order confirmed|enjoy the movie|reservation confirmed|order placed/i.test(text);
+}
+
+async function jsClickExact(page: Page, ...texts: string[]): Promise<boolean> {
+  for (const text of texts) {
+    const clicked = await page.evaluate((t: string) => {
+      const all = Array.from(document.querySelectorAll('button, a')) as HTMLElement[];
+      const match = all.find(el =>
+        (el.innerText ?? el.textContent ?? '').trim().toLowerCase() === t.toLowerCase()
+      );
+      if (match) { match.click(); return true; }
+      return false;
+    }, text);
+
+    if (clicked) {
+      log(`  JS-clicked (exact) "${text}"`);
+      await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
+      await sleep(500);
+      return true;
+    }
+  }
+  return false;
 }
 
 async function jsClickText(page: Page, ...texts: string[]): Promise<boolean> {
@@ -196,7 +242,7 @@ async function jsClickText(page: Page, ...texts: string[]): Promise<boolean> {
 
     if (clicked) {
       log(`  JS-clicked "${text}"`);
-      await page.waitForLoadState('domcontentloaded');
+      await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
       await sleep(500);
       return true;
     }

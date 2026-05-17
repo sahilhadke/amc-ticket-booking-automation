@@ -6,7 +6,7 @@ Playwright + TypeScript CLI that automates AMC movie ticket booking for AMC Stub
 |------|---------|-------------|
 | 1 — Discover | `npm run get-showtimes` | Fetches all movies and showtimes for a date → saves JSON |
 | 2 — Book | `npm run book` | Books a specific movie/time, selects best seat, checks out at $0.00 |
-| 3 — Notify | *(coming soon)* | Sends confirmation notification |
+| 3 — Read Email | `npm run get-ticket-email` | Reads the AMC confirmation email, saves QR code + ticket details JSON |
 
 ---
 
@@ -72,6 +72,91 @@ Saves to `showtimes/amc-metreon-16-{date}.json`:
 - `availability` shows discount offers (e.g. `"20% OFF"`, `"UP TO 15% OFF"`) or seat warnings (e.g. `"Almost Full"`).
 - `format` shows the screen type: `LASER AT AMC`, `IMAX WITH LASER AT AMC`, `DOLBY CINEMA AT AMC`, `FAN FAVES`, etc.
 - Output folder `showtimes/` is gitignored.
+
+---
+
+## Step 3 — Get Ticket Email
+
+Reads the most recent AMC confirmation email from Gmail and extracts only the 5 details you actually need to walk into the theatre. Everything else (order number, totals, member info, payment, etc.) stays in the email — never logged, never stored.
+
+### Command
+
+```bash
+npm run get-ticket-email
+```
+
+### Output
+
+**Console** — exactly 5 lines, nothing else:
+
+```
+Seat:    N20
+Time:    2:00 PM
+Date:    5/21/2026
+Theatre: 16
+QR Code: tickets\qr-1154932458.png
+```
+
+**Files saved to `tickets/`:**
+
+| File | Contents |
+|------|----------|
+| `qr-{orderNumber}.png` | The QR code image (scan this at the theatre) |
+| `ticket-{orderNumber}.json` | The same 5 fields shown in the console |
+
+Example `tickets/ticket-1154932458.json`:
+
+```json
+{
+  "seat": "N20",
+  "time": "2:00 PM",
+  "date": "5/21/2026",
+  "theatre": "16",
+  "qrCode": "tickets\\qr-1154932458.png"
+}
+```
+
+### What it parses
+
+The script searches Gmail for `from:amctheatres.com newer_than:5m` and pulls these fields from the HTML body:
+
+| Field | Source in email |
+|-------|-----------------|
+| `seat` | `Reserved Seats: N20` |
+| `time` | First half of `2:00 PM 5/21/2026` |
+| `date` | Second half of `2:00 PM 5/21/2026` |
+| `theatre` | `Auditorium: 16` |
+| `qrCode` | `<img title="QR Code">` — downloaded to PNG |
+
+### One-time Gmail setup
+
+You need Gmail read-only API access. This is a one-time setup.
+
+1. **Create OAuth credentials** in [Google Cloud Console](https://console.cloud.google.com/):
+   - Enable the **Gmail API**
+   - Create an **OAuth 2.0 Client ID** (type: Desktop app or Web app with `http://localhost:3000` redirect)
+   - Copy the Client ID and Client Secret
+
+2. **Add credentials to `.env`:**
+   ```
+   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=your-client-secret
+   ```
+
+3. **Authorise** — runs a temporary local server on `localhost:3000` to capture the OAuth callback and saves a refresh token to `.env`:
+   ```bash
+   npm run auth-email
+   ```
+   A browser will open asking you to approve Gmail read access. After approving, `GMAIL_REFRESH_TOKEN` is written to `.env` automatically.
+
+After this, `npm run get-ticket-email` works without any further login.
+
+### Notes
+
+- The Gmail scope is **read-only** (`gmail.readonly`) — the tool cannot send, delete, or modify any email.
+- The script looks at emails from the **last 5 minutes** only, so run it right after booking.
+- If no AMC email is found or no QR code is in the HTML, the script exits without writing anything.
+- Output folder `tickets/` is gitignored.
 
 ---
 
@@ -152,6 +237,7 @@ If it shows the **"Confirm Purchase"** page still open, the Purchase button clic
 1. **Session login** — You log in manually once using your real Brave browser (no Cloudflare/Turnstile issues). The session is saved and reused for all future bookings.
 2. **Seat selection** — Applies a radial-from-back-center algorithm: picks the seat closest to the back-center of the theater (best sightlines), skipping wheelchair spaces and front rows.
 3. **Checkout** — Automatically selects the A-List reservation option, skips food add-ons, accepts terms, and clicks Purchase. Total is always $0.00.
+4. **Email read** — Pulls the AMC confirmation email from Gmail (read-only scope), extracts only seat / time / date / theatre / QR, and saves them. Other email contents are never logged or stored.
 
 ## Prerequisites
 
@@ -234,6 +320,8 @@ The seat with the lowest score is selected. The algorithm automatically excludes
 src/
 ├── getShowtimes.ts   # Step 1 — scrape all movies/showtimes for a date → JSON
 ├── index.ts          # Step 2 — CLI entry, orchestrates booking flow
+├── authEmail.ts      # Step 3 setup — Google OAuth flow, saves refresh token to .env
+├── getTicketEmail.ts # Step 3 — reads AMC email, saves QR PNG + ticket JSON
 ├── saveSession.ts    # Session login via CDP-connected Brave
 ├── movieFinder.ts    # Navigates showtimes page, finds and clicks the showtime
 ├── seatSelector.ts   # Parses seat map, picks best seat in last 4 rows (radial)
