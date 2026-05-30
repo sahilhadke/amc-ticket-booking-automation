@@ -43,3 +43,24 @@ export function addToHistory(movie: WatchedMovie): void {
     saveHistory(data);
   }
 }
+
+// Merge crawled entries into the on-disk history, preserving existing ones.
+// Returns the count of newly added entries and the resulting total.
+export function mergeWatchedMovies(newMovies: WatchedMovie[]): { added: number; total: number } {
+  const data = loadHistory();
+  const existingKeys = new Set(data.movies.map(m => `${m.title}|${m.date}`));
+  let added = 0;
+  for (const m of newMovies) {
+    const key = `${m.title}|${m.date}`;
+    if (!existingKeys.has(key)) {
+      existingKeys.add(key);
+      data.movies.push(m);
+      added++;
+    }
+  }
+  if (added > 0) {
+    data.movies.sort((a, b) => (b.date > a.date ? 1 : -1));
+    saveHistory(data);
+  }
+  return { added, total: data.movies.length };
+}

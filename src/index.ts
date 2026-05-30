@@ -9,6 +9,8 @@ import { chromium } from 'patchright';
 import { findShowtime } from './movieFinder';
 import { selectBestSeat } from './seatSelector';
 import { completeCheckout } from './checkout';
+import { crawlAndMergeHistory } from './crawlHistory';
+import { isAlreadyWatched } from './historyManager';
 import { BookingArgs } from './types';
 
 const SESSION_PATH = path.join(process.cwd(), 'playwright', '.auth', 'session.json');
@@ -47,6 +49,16 @@ async function main(): Promise<void> {
   const page = await context.newPage();
 
   try {
+    await crawlAndMergeHistory(page);
+
+    const watched = isAlreadyWatched(args.movie);
+    if (watched) {
+      throw new Error(
+        `Already watched "${watched.title}" on ${watched.date}. ` +
+        `Pick a different movie or remove the entry from watched-history.json to override.`
+      );
+    }
+
     await findShowtime(page, args);
     const seat = await selectBestSeat(page);
     const result = await completeCheckout(page);

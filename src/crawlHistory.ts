@@ -2,75 +2,113 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 import * as path from 'path';
-import { chromium } from 'patchright';
-import { saveHistory, WatchedMovie } from './historyManager';
+import { Page, chromium } from 'patchright';
+import { mergeWatchedMovies, WatchedMovie } from './historyManager';
 import { log } from './utils/logger';
+import { sleep, gotoWithQueue } from './utils/human';
 
 const SESSION_PATH = path.join(process.cwd(), 'playwright', '.auth', 'session.json');
+const HISTORY_URL  = 'https://www.amctheatres.com/my-amc/history';
 
-function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+// Scrape every visible purchase entry on /my-amc/history using DOM selectors.
+// Returns dedup'd entries (title + ISO date) — subscription/membership rows
+// (which have no "Ticket Confirmation #") are skipped.
+async function scrapeVisibleEntries(page: Page): Promise<WatchedMovie[]> {
+  const raw = await page.evaluate(() => {
+    const out: { title: string; dateText: string }[] = [];
+    const dateHeadings = Array.from(document.querySelectorAll('h2'));
+    for (const h2 of dateHeadings) {
+      const dateText = (h2.textContent || '').trim();
+      // Must look like "May 29, 2026"
+      if (!/^[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}$/.test(dateText)) continue;
 
-// Parse movie entries from the history page's raw body text.
-// Each entry looks like:
-//   May 8, 2026
-//   Project Hail Mary
-//   2 HR 36 MIN
-//   PG13
-//   TICKET CONFIRMATION #: 0164855990
-//   $0.00
-function parseEntries(rawText: string): WatchedMovie[] {
-  const entries: WatchedMovie[] = [];
+      const wrapper = h2.parentElement;
+      if (!wrapper) continue;
 
-  // Split on "TICKET CONFIRMATION #:" — each split gives us the block BEFORE the confirmation
-  const blocks = rawText.split(/TICKET CONFIRMATION #:\s*\d+/);
+      const trigger = wrapper.querySelector('.accordion__trigger');
+      if (!trigger) continue;
 
-  for (const block of blocks) {
-    const lines = block
-      .split('\n')
-      .map(l => l.trim())
-      .filter(l => l.length > 0);
+      const h3s = Array.from(trigger.querySelectorAll('h3'));
+      const confirmH3 = h3s.find(h => /Ticket Confirmation/i.test(h.textContent || ''));
+      // Skip subscriptions / non-ticket rows
+      if (!confirmH3) continue;
 
-    // We only care about the last few lines of each block (date + title + runtime/rating)
-    const tail = lines.slice(-8);
+      const titleH3 = h3s.find(h => h !== confirmH3);
+      const title = (titleH3?.textContent || '').trim();
+      if (!title) continue;
 
-    // Find the date (last occurrence of "Month DD, YYYY")
-    let dateISO = '';
-    let dateIdx = -1;
-    for (let i = tail.length - 1; i >= 0; i--) {
-      const m = tail[i].match(/^(\w{3,9})\s+(\d{1,2}),?\s+(\d{4})$/);
-      if (m) {
-        const d = new Date(`${m[1]} ${m[2]}, ${m[3]}`);
-        if (!isNaN(d.getTime())) {
-          dateISO = d.toLocaleDateString('en-CA'); // YYYY-MM-DD
-          dateIdx = i;
-          break;
-        }
-      }
+      out.push({ title, dateText });
     }
-    if (!dateISO || dateIdx < 0) continue;
+    return out;
+  });
 
-    // Title is the line(s) between the date and runtime/rating
-    const afterDate = tail.slice(dateIdx + 1);
-    const titleLines: string[] = [];
-    for (const line of afterDate) {
-      // Stop at runtime or rating
-      if (/^\d+\s+HR/i.test(line) || /^(G|PG|R|NC-17|PG-?13)$/i.test(line)) break;
-      // Skip empty, "Cancel Reservation", price lines
-      if (/^\$[\d.]+$/.test(line) || /cancel/i.test(line)) break;
-      titleLines.push(line);
-    }
-    const title = titleLines.join(' ').trim();
-    if (!title || title.length < 2) continue;
-
-    // Skip non-movie entries (subscriptions, promotions)
-    if (/^AMC A-List Monthly|^AMC Screen Unseen|^Refunds|^Past \d|^Past year|^2\d{3}$/i.test(title)) continue;
-
-    entries.push({ title, date: dateISO });
+  const movies: WatchedMovie[] = [];
+  const seen = new Set<string>();
+  for (const { title, dateText } of raw) {
+    const parsed = new Date(dateText);
+    if (isNaN(parsed.getTime())) continue;
+    const date = parsed.toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const key = `${title}|${date}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    movies.push({ title, date });
   }
-
-  return entries;
+  return movies;
 }
 
+// Change the period filter via the native <select> element. Returns true if
+// the value actually changed (i.e. the option exists).
+async function setPeriodFilter(page: Page, value: string): Promise<boolean> {
+  return page.evaluate((v: string) => {
+    const select = document.querySelector('select') as HTMLSelectElement | null;
+    if (!select) return false;
+    const opt = select.querySelector(`option[value="${v}"]`) as HTMLOptionElement | null;
+    if (!opt) return false;
+    if (select.value === v) return false;
+    // Use the native setter so React-style components register the change
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
+    setter?.call(select, v);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }, value);
+}
+
+// Scrape /my-amc/history, walking the period filter to gather as much
+// history as the page exposes, and merge into watched-history.json.
+// Caller supplies an already-authenticated page (e.g. the booking flow's page).
+export async function crawlAndMergeHistory(page: Page): Promise<{ added: number; total: number; scraped: number }> {
+  log('Fetching watch history from AMC...');
+  await gotoWithQueue(page, HISTORY_URL);
+  await sleep(2000);
+  await page.waitForSelector('.accordion__trigger', { timeout: 15_000 }).catch(() => {});
+
+  const all: WatchedMovie[] = [];
+  const seen = new Set<string>();
+  const mergeBatch = (batch: WatchedMovie[]) => {
+    for (const m of batch) {
+      const k = `${m.title}|${m.date}`;
+      if (!seen.has(k)) { seen.add(k); all.push(m); }
+    }
+  };
+
+  mergeBatch(await scrapeVisibleEntries(page));
+
+  // Walk the period filter to widen the window.
+  const filterValues = ['60d', '90d', '1y', '2025', '2024', '2023'];
+  for (const v of filterValues) {
+    const changed = await setPeriodFilter(page, v);
+    if (!changed) continue;
+    await sleep(2500);
+    await page.waitForSelector('.accordion__trigger', { timeout: 10_000 }).catch(() => {});
+    mergeBatch(await scrapeVisibleEntries(page));
+  }
+
+  const { added, total } = mergeWatchedMovies(all);
+  log(`History scraped: ${all.length} visible entries · +${added} new · ${total} total in watched-history.json`);
+  return { added, total, scraped: all.length };
+}
+
+// Standalone CLI: `npm run crawl-history`
 async function main() {
   const browser = await chromium.launch({ headless: false, slowMo: 50 });
   const context = await browser.newContext({
@@ -81,71 +119,16 @@ async function main() {
   });
   const page = await context.newPage();
 
-  log('Navigating to AMC order history...');
-  await page.goto('https://www.amctheatres.com/my-amc/history', { waitUntil: 'domcontentloaded' });
-
-  // Wait out Queue-it if active
-  if (page.url().includes('queue')) {
-    log('Queue-it waiting room — waiting up to 3 min...');
-    await page.waitForURL('**/my-amc/history**', { timeout: 180_000 });
-    log('Queue passed.');
+  try {
+    await crawlAndMergeHistory(page);
+  } finally {
+    await browser.close();
   }
-  await sleep(3000);
-
-  const allMovies: WatchedMovie[] = [];
-  const seen = new Set<string>();
-
-  function mergeEntries(entries: WatchedMovie[]) {
-    for (const e of entries) {
-      const key = `${e.title}|${e.date}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        allMovies.push(e);
-      }
-    }
-  }
-
-  // Scrape the current view (defaults to "Past 30 days")
-  log('Scraping default view...');
-  const defaultText = await page.innerText('body').catch(() => '');
-  mergeEntries(parseEntries(defaultText));
-  log(`  Found ${allMovies.length} entries so far`);
-
-  // Find and click each time-period filter to get full history
-  const filterLabels = ['Past 60 days', 'Past 90 days', 'Past year', '2025', '2024', '2023'];
-
-  for (const label of filterLabels) {
-    const clicked = await page.evaluate((lbl: string) => {
-      const all = Array.from(document.querySelectorAll('button, a, li, span')) as HTMLElement[];
-      const btn = all.find(el => el.innerText?.trim() === lbl);
-      if (btn) { btn.click(); return true; }
-      return false;
-    }, label);
-
-    if (!clicked) continue;
-
-    log(`Clicked filter: "${label}"`);
-    await sleep(2500);
-
-    const text = await page.innerText('body').catch(() => '');
-    const before = allMovies.length;
-    mergeEntries(parseEntries(text));
-    log(`  +${allMovies.length - before} new entries (total: ${allMovies.length})`);
-  }
-
-  // Sort newest first
-  allMovies.sort((a, b) => (b.date > a.date ? 1 : -1));
-
-  log(`\nTotal unique movies scraped: ${allMovies.length}`);
-  allMovies.forEach(m => log(`  ${m.date}  ${m.title}`));
-
-  saveHistory({ lastUpdated: new Date().toISOString().split('T')[0], movies: allMovies });
-  log('\nSaved to watched-history.json');
-
-  await browser.close();
 }
 
-main().catch(err => {
-  console.error('Error:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Error:', err?.message ?? err);
+    process.exit(1);
+  });
+}
